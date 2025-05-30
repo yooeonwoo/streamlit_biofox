@@ -1,10 +1,15 @@
 import streamlit as st
 import streamlit_shadcn_ui as ui
 import supabase
+import os
+from dotenv import load_dotenv
+
+# .env 파일에서 환경 변수 로드
+load_dotenv()
 
 # Supabase 클라이언트 설정
-SUPABASE_URL = "https://bbkwmpygoxveuzppcfsp.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJia3dtcHlnb3h2ZXV6cHBjZnNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDgzNDQ1MTUsImV4cCI6MjA2MzkyMDUxNX0.D-R55xaWMBZp5gg8IwG2BkRgI6JjdKjbc5vnul4mfcY"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase_client = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
 
