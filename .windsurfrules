@@ -1,0 +1,2 @@
+n8n 은 설치할필요가 없음. 내가 따로 백엔드에 구현할거임. 그냥 웹훅 설정만 적절하게 해주면 됨.
+모든 구현은 이 프로젝트의 shadcn ui 를 무조건적으로 최대한 체계적으로 활용할것. (https://github.com/ObservedObserver/streamlit-shadcn-ui-docs)
