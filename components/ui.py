@@ -5,27 +5,114 @@ import json
 import pyperclip
 from datetime import datetime
 
+def generate_download_content(result, platform):
+    """다운로드용 텍스트 콘텐츠 생성"""
+    content_lines = []
+    content_lines.append("=" * 50)
+    content_lines.append("BIOFOX 자동화 결과")
+    content_lines.append("=" * 50)
+    content_lines.append(f"생성일시: {datetime.now().strftime('%Y년 %m월 %d일 %H시 %M분')}")
+    content_lines.append(f"플랫폼: {platform}")
+    content_lines.append("")
+    
+    if platform == '인스타그램':
+        if result.get('headline'):
+            content_lines.append("📣 후킹 문구")
+            content_lines.append("-" * 20)
+            content_lines.append(result['headline'])
+            content_lines.append("")
+        
+        if result.get('caption'):
+            content_lines.append("📱 인스타그램 캡션")
+            content_lines.append("-" * 20)
+            content_lines.append(result['caption'])
+            content_lines.append("")
+        
+        if result.get('hashtags'):
+            content_lines.append("🏷️ 해시태그")
+            content_lines.append("-" * 20)
+            content_lines.append(' '.join(result['hashtags']))
+            content_lines.append("")
+    
+    else:  # 블로그
+        if result.get('blog_title'):
+            content_lines.append("📝 블로그 제목")
+            content_lines.append("-" * 20)
+            content_lines.append(result['blog_title'])
+            content_lines.append("")
+        
+        if result.get('blog_content'):
+            content_lines.append("📄 블로그 본문")
+            content_lines.append("-" * 20)
+            content_lines.append(result['blog_content'])
+            content_lines.append("")
+        
+        if result.get('hashtags'):
+            content_lines.append("🏷️ 태그")
+            content_lines.append("-" * 20)
+            content_lines.append(' '.join(result['hashtags']))
+            content_lines.append("")
+    
+    content_lines.append("=" * 50)
+    content_lines.append("생성: BIOFOX 자동화")
+    content_lines.append("=" * 50)
+    
+    return '\n'.join(content_lines)
+
 def show_input_form():
     """광고 생성을 위한 입력 폼 표시"""
+    st.markdown("## 📝 콘텐츠 정보 입력")
+    
+    # 플랫폼 선택 - 폼 밖에서 처리
+    platform_col1, platform_col2 = st.columns([1, 2])
+    with platform_col1:
+        st.write("플랫폼 선택:")
+    with platform_col2:
+        platform = st.selectbox(
+            "플랫폼 선택",
+            options=["인스타그램", "블로그"],
+            key="platform_select_outside",
+            label_visibility="collapsed"
+        )
+    
+    # 블로그 선택 시 추가 옵션 표시
+    blog_type = None
+    if platform == "블로그":
+        st.markdown("### 📝 블로그 콘텐츠 유형")
+        blog_type_col1, blog_type_col2 = st.columns([1, 3])
+        with blog_type_col1:
+            st.write("콘텐츠 유형:")
+        with blog_type_col2:
+            blog_type_display = st.selectbox(
+                "블로그 콘텐츠 유형",
+                options=[
+                    "후기형 (1인칭) - 감정공감형",
+                    "후기형 (1인칭) - 지적호기심형",
+                    "걱정 유발형 - 두괄식",
+                    "체험단형 (3인칭) - 과정 중심",
+                    "체험단형 (3인칭) - 결과 중심"
+                ],
+                key="blog_type_select_outside",
+                label_visibility="collapsed"
+            )
+            
+            # 화면 표시용을 내부 코드용으로 변환
+            blog_type_mapping = {
+                "후기형 (1인칭) - 감정공감형": "후기형V1",
+                "후기형 (1인칭) - 지적호기심형": "후기형V2", 
+                "걱정 유발형 - 두괄식": "걱정유발형",
+                "체험단형 (3인칭) - 과정 중심": "체험단형V1",
+                "체험단형 (3인칭) - 결과 중심": "체험단형V2"
+            }
+            blog_type = blog_type_mapping.get(blog_type_display, blog_type_display)
+        st.markdown("---")
+    
+    # 나머지 입력 요소들은 폼 안에서 처리
     with st.form(key="ad_form"):
-        st.markdown("## 📝 광고 정보 입력")
-        
         # 웹: 2줄 2개씩, 모바일: 4줄 1개씩 (라벨과 드롭다운 가로 배치)
         col1, col2 = st.columns(2)
         
         with col1:
-            platform_col1, platform_col2 = st.columns([1, 2])
-            with platform_col1:
-                st.write("플랫폼 선택:")
-            with platform_col2:
-                platform = st.selectbox(
-                    "플랫폼 선택",
-                    options=["인스타그램", "블로그"],
-                    key="platform_select",
-                    label_visibility="collapsed"
-                )
-        
-        with col2:
             age_col1, age_col2 = st.columns([1, 2])
             with age_col1:
                 st.write("타겟 연령대:")
@@ -37,9 +124,7 @@ def show_input_form():
                     label_visibility="collapsed"
                 )
         
-        col3, col4 = st.columns(2)
-        
-        with col3:
+        with col2:
             gender_col1, gender_col2 = st.columns([1, 2])
             with gender_col1:
                 st.write("성별:")
@@ -51,7 +136,9 @@ def show_input_form():
                     label_visibility="collapsed"
                 )
         
-        with col4:
+        col3, col4 = st.columns(2)
+        
+        with col3:
             concern_col1, concern_col2 = st.columns([1, 2])
             with concern_col1:
                 st.write("피부고민:")
@@ -69,6 +156,10 @@ def show_input_form():
                     label_visibility="collapsed"
                 )
         
+        with col4:
+            # 빈 공간으로 두어서 3개 요소만 표시
+            pass
+        
         st.write("메시지를 자유롭게 작성해도, 광고법에 따라 작성됩니다.")
         customer_message = st.text_area(
             "원장님 메시지",
@@ -78,7 +169,7 @@ def show_input_form():
         )
         
         # 추가 정보 입력 섹션
-        st.markdown("### 📞 인스타 최적화에 필요한 정보")
+        st.markdown("### 📞 컨텐츠 최적화에 필요한 정보")
         st.write("")
         
         # 3개 컬럼으로 배치
@@ -144,7 +235,7 @@ def show_input_form():
         col_submit = st.columns([1, 1, 1])
         with col_submit[1]:
             submit_button = st.form_submit_button(
-                label="✨ 광고 생성하기",
+                label="✨ 콘텐츠 생성하기",
                 use_container_width=True
             )
         
@@ -160,6 +251,10 @@ def show_input_form():
                 "region": region,
                 "shop_name": shop_name
             }
+            
+            # 블로그인 경우 블로그 타입 추가
+            if platform == "블로그" and blog_type:
+                form_data["blog_type"] = blog_type
             
             # 세션 상태에 저장
             st.session_state.form_data = form_data
@@ -245,8 +340,45 @@ def show_results():
     </style>
     """, unsafe_allow_html=True)
     
+    # 상단 버튼들
+    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
+    
+    with btn_col1:
+        if st.button("🔙 새로 작성하기", use_container_width=True):
+            # 세션 상태 초기화
+            st.session_state.result = None
+            st.session_state.chat_enabled = False
+            st.session_state.messages = []
+            st.session_state.version_history = []
+            st.session_state.form_data = {}
+            st.rerun()
+    
+    with btn_col2:
+        if st.button("💾 텍스트 다운로드", use_container_width=True):
+            download_content = generate_download_content(result, platform)
+            st.download_button(
+                label="📄 다운로드",
+                data=download_content,
+                file_name=f"BIOFOX_자동화_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key="download_text_btn"
+            )
+    
+    with btn_col3:
+        from components.auth import logout
+        if st.button("🚪 로그아웃", use_container_width=True):
+            success, message = logout()
+            if success:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+    
+    st.markdown("---")
+    
     # 제목 표시
-    st.markdown("## 🏁 생성된 광고", help="LLM이 생성한 광고 결과입니다")
+    st.markdown("## 🏁 생성 결과", help="AI가 생성한 콘텐츠 결과입니다")
     
     # 주의사항 표시
     st.markdown("""
@@ -601,35 +733,13 @@ def show_results():
                     except Exception as e:
                         st.error(f"복사 중 오류가 발생했습니다: {str(e)}")
 
-def show_chat_interface():
-    """광고 수정을 위한 채팅 인터페이스"""
-    if not st.session_state.get('chat_enabled'):
-        return
-    
-    st.markdown("## 💬 광고 수정 요청")
-    
-    # 이전 메시지 표시
-    for message in st.session_state.get('messages', []):
-        if message["role"] == "user":
-            st.chat_message("user").markdown(message["content"])
-        else:
-            st.chat_message("assistant").markdown(message["content"])
-    
-    # 채팅 입력
-    user_input = st.chat_input("수정 사항을 입력하세요...")
-    
-    if user_input:
-        from app import handle_chat_input
-        handle_chat_input(user_input)
-        
-        # 새로고침하여 수정된 내용 표시
-        st.rerun()
+# 채팅 기능 제거됨
 
 def init_page():
     """페이지 기본 설정"""
     # 페이지 설정
     st.set_page_config(
-        page_title="BIOFOX 광고 생성기",
+        page_title="BIOFOX 자동화",
         page_icon="✨",
         layout="centered"
     )

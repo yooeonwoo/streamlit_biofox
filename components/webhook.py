@@ -32,20 +32,28 @@ def parse_blog_format(content):
         
         # [3줄 요약] + [본문] 섹션 합쳐서 추출
         summary_match = re.search(r'\[3줄 요약\]\s*\n(.*?)(?=\n\[본문\])', content, re.DOTALL)
-        content_match = re.search(r'\[본문\]\s*\n(.*?)(?=\n\[태그\]|------)', content, re.DOTALL)
+        # [본문] 섹션 추출 - 각주 제외하고 추출
+        content_match = re.search(r'\[본문\]\s*\n(.*?)(?=\n\[태그\]|------|\n\n※|$)', content, re.DOTALL)
         
         blog_content_parts = []
         if summary_match:
             blog_content_parts.append(summary_match.group(1).strip())
         if content_match:
             blog_content_parts.append(content_match.group(1).strip())
+        
+        # [본문]만 있는 경우도 처리 (3줄 요약이 없는 경우)
+        if not blog_content_parts and not summary_match:
+            content_only_match = re.search(r'\[본문\]\s*\n(.*?)(?=------|\n\n※|$)', content, re.DOTALL)
+            if content_only_match:
+                blog_content_parts.append(content_only_match.group(1).strip())
             
         if blog_content_parts:
             blog_content = "\n\n".join(blog_content_parts)
             result["blog_content"] = blog_content
             result["caption"] = blog_content  # 인스타그램용으로도 사용
+            st.info(f"📄 블로그 본문 길이: {len(blog_content)}")
         
-        # [태그] 섹션 추출
+        # [태그] 섹션 추출 - 블로그에는 태그 섹션이 없을 수도 있음
         tag_match = re.search(r'\[태그\]\s*\n(.*?)(?=\n\[|------|\n\n※|$)', content, re.DOTALL)
         if tag_match:
             tag_text = tag_match.group(1).strip()
@@ -53,16 +61,23 @@ def parse_blog_format(content):
                 hashtags = tag_text.replace('\n', ' ').split()
                 # 빈 문자열 제거 및 # 확인
                 result["hashtags"] = [tag for tag in hashtags if tag.strip() and tag.startswith('#')]
+        else:
+            # 태그 섹션이 없으면 빈 배열
+            result["hashtags"] = []
         
-        # 각주 섹션 추출 (------ 이후의 모든 ※ 내용들)
+        # 각주 섹션 추출 - 블로그에는 각주가 없을 수도 있음
         footnote_match = re.search(r'------\s*\n(※.*?)$', content, re.DOTALL)
         if footnote_match:
             footnote_text = footnote_match.group(1).strip()
             if footnote_text:
-                # 블로그 콘텐츠와 캡션에 각주 추가
-                if result["blog_content"]:
+                # 각주 중복 확인 - 천방케어 키워드로 체크 (가장 확실한 방법)
+                has_footnote_in_blog = result["blog_content"] and "천방케어는 MICROJET" in result["blog_content"]
+                has_footnote_in_caption = result["caption"] and "천방케어는 MICROJET" in result["caption"]
+                
+                # 블로그 콘텐츠에 각주가 이미 포함되어 있지 않은 경우에만 추가
+                if result["blog_content"] and not has_footnote_in_blog:
                     result["blog_content"] += f"\n\n{footnote_text}"
-                if result["caption"]:
+                if result["caption"] and not has_footnote_in_caption:
                     result["caption"] += f"\n\n{footnote_text}"
         
         return result
@@ -101,8 +116,8 @@ def parse_instagram_format(content):
         if hook_match:
             result["headline"] = hook_match.group(1).strip()
         
-        # [캡션] 섹션 추출
-        caption_match = re.search(r'\[캡션\]\s*\n(.*?)(?=\n\[|------)', content, re.DOTALL)
+        # [캡션] 섹션 추출 - 각주 제외하고 추출
+        caption_match = re.search(r'\[캡션\]\s*\n(.*?)(?=\n\[|------|\n\n※)', content, re.DOTALL)
         if caption_match:
             caption_text = caption_match.group(1).strip()
             result["caption"] = caption_text
@@ -115,10 +130,14 @@ def parse_instagram_format(content):
         if footnote_match:
             footnote_text = footnote_match.group(1).strip()
             if footnote_text:
-                # 캡션과 블로그 콘텐츠에 각주 추가
-                if result["caption"]:
+                # 각주 중복 확인 - 천방케어 키워드로 체크 (가장 확실한 방법)
+                has_footnote_in_caption = result["caption"] and "천방케어는 MICROJET" in result["caption"]
+                has_footnote_in_blog = result["blog_content"] and "천방케어는 MICROJET" in result["blog_content"]
+                
+                # 캡션과 블로그 콘텐츠에 각주가 이미 포함되어 있지 않은 경우에만 추가
+                if result["caption"] and not has_footnote_in_caption:
                     result["caption"] += f"\n\n{footnote_text}"
-                if result["blog_content"]:
+                if result["blog_content"] and not has_footnote_in_blog:
                     result["blog_content"] += f"\n\n{footnote_text}"
         
         # [해시태그] 섹션 추출
@@ -165,35 +184,95 @@ def call_n8n_webhook(data, webhook_type="generate"):
         return None
     
     try:
+        # 사용자 정의 Transport Adapter로 타임아웃 제한 해결
+        from requests.adapters import HTTPAdapter
+        import socket
+        import time
+        
+        # 시스템 레벨 소켓 타임아웃 설정
+        original_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(600)
+        
+        class CustomTimeoutAdapter(HTTPAdapter):
+            def __init__(self, timeout=600, *args, **kwargs):
+                self.timeout = timeout
+                super().__init__(*args, **kwargs)
+                
+            def send(self, request, **kwargs):
+                timeout = kwargs.get('timeout')
+                if timeout is None:
+                    kwargs['timeout'] = self.timeout
+                return super().send(request, **kwargs)
+        
+        # 세션 생성 및 어댑터 설정
+        session = requests.Session()
+        adapter = CustomTimeoutAdapter(timeout=600)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
         # POST 요청으로 데이터 전송 (헤더 추가)
         headers = {
             'Content-Type': 'application/json',
-            'User-Agent': 'BIOFOX-AdGenerator/1.0'
+            'User-Agent': 'BIOFOX-AdGenerator/1.0',
+            'Connection': 'keep-alive'
         }
         
-        # 디버깅 정보 출력 (개발 완료 후 제거됨)
-        # st.info(f"🔗 웹훅 호출: {webhook_url}")
-        # st.info(f"🔧 .env에서 읽은 URL: {os.getenv('N8N_WEBHOOK_URL')}")
-        # if webhook_type == "generate":
-        #     st.info(f"📤 데이터 유형: {data.get('type', 'unknown')}")
+        start_time = time.time()
+        st.info(f"🚀 요청 시작: {time.strftime('%H:%M:%S')}")
         
-        response = requests.post(webhook_url, json=data, headers=headers, timeout=120)
+        # 사용자 정의 세션으로 요청
+        response = session.post(
+            webhook_url, 
+            json=data, 
+            headers=headers, 
+            timeout=(60, 600),  # (연결 타임아웃, 읽기 타임아웃)
+            stream=False
+        )
+        
+        # 소켓 타임아웃 복원
+        socket.setdefaulttimeout(original_timeout)
+        
+        end_time = time.time()
+        duration = end_time - start_time
+        st.info(f"✅ 응답 완료: {time.strftime('%H:%M:%S')} (소요시간: {duration:.1f}초)")
+        st.info(f"📊 응답 상태: {response.status_code}, 응답 크기: {len(response.text)} 바이트")
         
         # 응답 확인
         if response.status_code == 200:
             try:
                 # JSON 응답 처리 시도
                 json_data = response.json()
+                st.success("✅ 정상 응답 수신")
                 return process_llm_response(json_data)
             except json.JSONDecodeError:
                 # JSON이 아닌 응답인 경우 텍스트 처리 시도
+                st.warning("⚠️ JSON 파싱 실패, 텍스트로 처리")
                 return process_llm_response({"content": response.text})
+        elif response.status_code == 524:
+            # Cloudflare 타임아웃 오류 - 하지만 응답 본문이 있다면 처리 시도
+            if response.text and len(response.text) > 100:
+                st.warning("⏱️ Cloudflare 타임아웃이 발생했지만 응답을 받았습니다. 처리를 시도합니다...")
+                try:
+                    # 응답 본문이 있으면 처리 시도
+                    return process_llm_response({"content": response.text})
+                except Exception as e:
+                    st.error(f"❌ 응답 처리 중 오류: {str(e)}")
+                    return None
+            else:
+                st.error("⏱️ 서버 응답 시간이 초과되었습니다. 처리가 완료되었을 수 있으니 잠시 후 새로고침해보세요.")
+                return None
         else:
             st.error(f"❌ 웹훅 호출 오류: {response.status_code} - {response.text[:100]}")
             return None
+            
+    except requests.exceptions.Timeout:
+        st.error("⏱️ 요청 시간이 초과되었습니다. 서버에서 처리가 완료되었을 수 있으니 잠시 후 새로고침해보세요.")
+        return None
     except Exception as e:
         st.error(f"❌ 웹훅 호출 중 예외 발생: {str(e)}")
         return None
+    
+    return None
 
 
 def process_llm_response(response_data):
@@ -206,25 +285,34 @@ def process_llm_response(response_data):
         dict: 파싱된 광고 데이터 (헤드라인, 캡션, 해시태그, 블로그 제목, 블로그 내용)
     """
     try:
+        st.info(f"🔍 응답 데이터 타입: {type(response_data)}")
+        
         # 응답이 리스트인 경우 첫 번째 항목 사용
         if isinstance(response_data, list) and len(response_data) > 0:
+            st.info(f"📋 리스트 응답, 첫 번째 항목 사용")
             response_data = response_data[0]
+        
+        st.info(f"🔍 처리 데이터 키: {list(response_data.keys()) if isinstance(response_data, dict) else 'Not dict'}")
         
         # 1. 응답에서 콘텐츠 추출
         content = None
         if 'output' in response_data:
             content = response_data['output']
+            st.info(f"📝 output 필드 발견, 길이: {len(content) if content else 0}")
             
             # 새로운 텍스트 형식 파싱 
             if content and isinstance(content, str):
                 # 블로그 형식인지 확인 ([제목], [3줄 요약], [본문], [태그])
                 if '[제목]' in content and '[본문]' in content:
+                    st.info("📚 블로그 형식으로 파싱")
                     return parse_blog_format(content)
                 # 인스타그램 형식 ([후킹문구], [캡션], [해시태그])
                 elif '[후킹문구]' in content and '[캡션]' in content:
+                    st.info("📱 인스타그램 형식으로 파싱")
                     return parse_instagram_format(content)
                 # 일반 텍스트 처리
                 else:
+                    st.info("📄 기본 인스타그램 형식으로 파싱")
                     return parse_instagram_format(content)  # 기본값으로 인스타그램 파싱
                 
         # JSON 형태의 응답 직접 파싱 시도 (기존 호환성)
