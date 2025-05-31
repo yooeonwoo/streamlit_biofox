@@ -5,6 +5,66 @@ import json
 import pyperclip
 from datetime import datetime
 
+def show_waiting_ui(job_id):
+    """결과 대기 중 UI 표시"""
+    st.markdown(f"""
+    <div style="
+        background-color: #f0f7ff; 
+        border: 1px solid #d0e3ff; 
+        border-radius: 8px; 
+        padding: 20px; 
+        margin: 20px 0;
+        text-align: center;
+        border-left: 4px solid #4b6fff;
+    ">
+        <div style="font-size: 24px; margin-bottom: 10px;">⏳</div>
+        <h3 style="margin-bottom: 15px; color: #2952cc;">콘텐츠 생성 중...</h3>
+        <p style="color: #444; margin-bottom: 15px;">
+            AI가 귀하의 요청을 처리하고 있습니다.<br>
+            잠시만 기다려주세요.
+        </p>
+        <div style="
+            width: 100%;
+            height: 4px;
+            background-color: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 15px 0;
+        ">
+            <div class="loading-bar" style="
+                height: 100%;
+                width: 30%;
+                background-color: #4b6fff;
+                border-radius: 2px;
+                animation: progress 1.5s infinite ease-in-out;
+            "></div>
+        </div>
+        <p style="font-size: 13px; color: #666; margin-top: 10px;">
+            작업 ID: {job_id[:8]}...
+        </p>
+    </div>
+    
+    <style>
+        @keyframes progress {{
+            0% {{
+                margin-left: -30%;
+            }}
+            100% {{
+                margin-left: 100%;
+            }}
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # 자동 새로고침
+    st.markdown("""
+    <script>
+        setTimeout(function() {
+            window.location.reload();
+        }, 5000);
+    </script>
+    """, unsafe_allow_html=True)
+
 def generate_download_content(result, platform):
     """다운로드용 텍스트 콘텐츠 생성"""
     content_lines = []
@@ -737,12 +797,23 @@ def show_results():
 
 def init_page():
     """페이지 기본 설정"""
-    # 페이지 설정
-    st.set_page_config(
-        page_title="BIOFOX 자동화",
-        page_icon="✨",
-        layout="centered"
-    )
+    # 메타 태그 추가
+    meta_tags = """
+    <head>
+        <title>BIOFOX 폭시</title>
+        <meta property="og:title" content="BIOFOX 폭시">
+        <meta property="og:description" content="BIOFOX 자동화">
+        <meta property="og:image" content="https://ad.biofoxi.com/logo.png">
+        <meta property="og:url" content="https://ad.biofoxi.com">
+        <meta property="og:type" content="website">
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:title" content="BIOFOX 폭시">
+        <meta name="twitter:description" content="BIOFOX 자동화">
+        <meta name="twitter:image" content="https://ad.biofoxi.com/logo.png">
+        <meta name="description" content="BIOFOX 자동화">
+    </head>
+    """
+    st.markdown(meta_tags, unsafe_allow_html=True)
     
     # CSS 스타일
     st.markdown("""

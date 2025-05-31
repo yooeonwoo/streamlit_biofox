@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # 컴포넌트 도입
-from components.webhook import call_n8n_webhook
+from components.webhook import call_n8n_webhook_async, check_job_result
 from components.ui import show_input_form, show_results, init_page
 from components.session import init_session_state, display_version, restore_version
 from components.auth import login_page, auth_required, is_authenticated, init_auth_session, is_admin
@@ -16,7 +16,7 @@ from components.admin import admin_page
 load_dotenv()
 
 def generate_content(form_data):
-    """광고 컨텐츠 생성"""
+    """광고 컨텐츠 생성 - 비동기 방식"""
     # 컨텐츠 타입에 따른 예상 시간 안내
     platform = form_data.get('platform', '인스타그램')
     if platform == '블로그':
@@ -32,11 +32,23 @@ def generate_content(form_data):
         st.info(time_msg)
     
     try:
-        # 웹훅 API 호출
-        result = call_n8n_webhook({
+        # 비동기 웹훅 API 호출 (클라이언트 job_id 생성)
+        job_id = call_n8n_webhook_async({
             "type": "generate",
             "data": form_data
         })
+        
+        if job_id:
+            # 세션 상태 업데이트
+            st.session_state.current_job_id = job_id
+            st.session_state.job_status = "processing"
+            st.session_state.form_data = form_data
+            return True
+        else:
+            with status_placeholder:
+                st.error("❌ 요청 처리 중 오류가 발생했습니다.")
+            return False
+            
     except Exception as e:
         with status_placeholder:
             st.error(f"❌ 오류 발생: {str(e)}")
@@ -45,94 +57,6 @@ def generate_content(form_data):
         # 진행 상태 표시 제거
         progress_placeholder.empty()
         status_placeholder.empty()
-    
-    # 결과 검증 및 처리
-    if result:
-        # 응답 형식에 따른 처리
-        if isinstance(result, dict):
-            # API 응답이 이미 딕셔너리인 경우 바로 사용
-            if 'status' in result and result['status'] == 'success' and 'data' in result:
-                parsed_data = result['data']
-                
-                # 필수 필드 확인
-                if 'headline' in parsed_data and 'caption' in parsed_data and 'hashtags' in parsed_data:
-                    # 결과 저장
-                    st.session_state.result = parsed_data
-                    st.session_state.chat_enabled = True
-                    st.session_state.messages = []
-                    st.session_state.version_history = [{
-                        'version': 1,
-                        'timestamp': datetime.now().strftime("%H:%M:%S"),
-                        'data': parsed_data.copy(),
-                        'user_request': None,  # 원본은 사용자 요청이 없음
-                        'is_original': True    # 원본임을 표시
-                    }]
-                    return True
-                else:
-                    st.error("❌ API 응답에 필수 필드가 누락되었습니다.")
-            else:
-                # 직접 응답 본문 파싱 시도
-                headline = result.get('headline', '')
-                caption = result.get('caption', '')
-                hashtags = result.get('hashtags', [])
-                blog_title = result.get('blog_title', '')
-                blog_content = result.get('blog_content', '')
-                
-                # 파싱된 데이터 구성
-                parsed_data = {
-                    "headline": headline,
-                    "caption": caption,
-                    "hashtags": hashtags,
-                    "blog_title": blog_title,
-                    "blog_content": blog_content
-                }
-                
-                # 결과 저장
-                st.session_state.result = parsed_data
-                st.session_state.chat_enabled = True
-                st.session_state.messages = []
-                st.session_state.version_history = [{
-                    'version': 1,
-                    'timestamp': datetime.now().strftime("%H:%M:%S"),
-                    'data': parsed_data.copy()
-                }]
-                return True
-        
-        # 응답이 리스트인 경우
-        elif isinstance(result, list) and len(result) > 0:
-            first_item = result[0]
-            if isinstance(first_item, dict):
-                # 필요한 정보 추출
-                headline = first_item.get('headline', '')
-                caption = first_item.get('caption', '')
-                hashtags = first_item.get('hashtags', [])
-                blog_title = first_item.get('blog_title', '')
-                blog_content = first_item.get('blog_content', '')
-                
-                # 파싱된 데이터 구성
-                parsed_data = {
-                    "headline": headline,
-                    "caption": caption,
-                    "hashtags": hashtags,
-                    "blog_title": blog_title,
-                    "blog_content": blog_content
-                }
-                
-                # 결과 저장
-                st.session_state.result = parsed_data
-                st.session_state.chat_enabled = True
-                st.session_state.messages = []
-                st.session_state.version_history = [{
-                    'version': 1,
-                    'timestamp': datetime.now().strftime("%H:%M:%S"),
-                    'data': parsed_data.copy()
-                }]
-                return True
-            else:
-                st.error(f"❌ 응답 형식이 예상과 다릅니다.")
-        else:
-            st.error(f"❌ 예상하지 못한 응답 형식입니다.")
-    return False
 
 def handle_chat_input(user_input):
     """채팅 입력 처리"""
@@ -197,7 +121,7 @@ def handle_chat_input(user_input):
         }
     }
     
-    result = call_n8n_webhook(modify_data, webhook_type="modify")
+    result = call_n8n_webhook_async(modify_data, webhook_type="modify")
     
     # 진행 상태 표시 제거
     progress_placeholder.empty()
@@ -262,8 +186,49 @@ def main():
         admin_page()
         return
     
+    # 작업 상태 확인 
+    if 'current_job_id' in st.session_state and st.session_state.get('job_status') == 'processing':
+        job_id = st.session_state.current_job_id
+        
+        # 수동 확인 버튼 추가
+        if st.button("🔄 수동으로 결과 확인"):
+            st.session_state.job_status = "processing"  # 강제 리셋
+            st.rerun()
+        
+        # 상태 UI 표시
+        st.info(f"🔄 콘텐츠 생성 중입니다... 잠시만 기다려주세요. (작업 ID: {job_id[:8]}...)")
+        
+        # 결과 확인
+        result = check_job_result(job_id)
+        
+        if result:
+            # 결과 저장 및 상태 업데이트
+            st.session_state.result = result
+            st.session_state.job_status = "completed"
+            
+            # 버전 관리용 히스토리 추가
+            st.session_state.version_history = [{
+                'version': 1,
+                'timestamp': datetime.now().strftime("%H:%M:%S"),
+                'data': result.copy(),
+                'is_original': True
+            }]
+            
+            # 페이지 리로드
+            st.rerun()
+        else:
+            # 결과가 아직 없으면 자동 새로고침
+            st.markdown("""
+            <script>
+                // 5초 후 자동 새로고침
+                setTimeout(function() {
+                    window.location.reload();
+                }, 5000);
+            </script>
+            """, unsafe_allow_html=True)
+    
     # 임시 표시 상태 확인 (버전 미리보기)
-    if 'temp_display' in st.session_state and st.session_state.temp_display:
+    elif 'temp_display' in st.session_state and st.session_state.temp_display:
         version_data = st.session_state.temp_display
         
         st.info(f"버전 {version_data['version']} 미리보기")

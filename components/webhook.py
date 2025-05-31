@@ -2,8 +2,11 @@ import requests
 import os
 import json
 import re
+import uuid
 import streamlit as st
+from datetime import datetime
 from dotenv import load_dotenv
+from components.supabase_client import get_job_result
 
 def parse_blog_format(content):
     """블로그 형식 파싱 ([제목], [3줄 요약], [본문], [태그] 구조)
@@ -166,17 +169,8 @@ def parse_instagram_format(content):
 # 환경변수 강제 재로드
 load_dotenv(override=True)
 
-def call_n8n_webhook(data, webhook_type="generate"):
-    """n8n webhook 호출 함수
-    
-    Args:
-        data (dict): 웹훅에 전송할 데이터
-        webhook_type (str): 웹훅 유형 (generate 또는 modify)
-    
-    Returns:
-        dict or None: 웹훅 응답 결과 또는 오류 시 None
-    """
-    # 웹훅 URL 가져오기
+def call_n8n_webhook_async(data, webhook_type="generate"):
+    """클라이언트에서 job_id 생성 후 n8n에 즉시 응답 요청"""
     webhook_url = os.getenv("N8N_WEBHOOK_URL")
     
     if not webhook_url:
@@ -184,95 +178,127 @@ def call_n8n_webhook(data, webhook_type="generate"):
         return None
     
     try:
-        # 사용자 정의 Transport Adapter로 타임아웃 제한 해결
-        from requests.adapters import HTTPAdapter
-        import socket
-        import time
+        # 클라이언트에서 job_id 생성
+        job_id = str(uuid.uuid4())
         
-        # 시스템 레벨 소켓 타임아웃 설정
-        original_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(600)
-        
-        class CustomTimeoutAdapter(HTTPAdapter):
-            def __init__(self, timeout=600, *args, **kwargs):
-                self.timeout = timeout
-                super().__init__(*args, **kwargs)
-                
-            def send(self, request, **kwargs):
-                timeout = kwargs.get('timeout')
-                if timeout is None:
-                    kwargs['timeout'] = self.timeout
-                return super().send(request, **kwargs)
-        
-        # 세션 생성 및 어댑터 설정
-        session = requests.Session()
-        adapter = CustomTimeoutAdapter(timeout=600)
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
-        
-        # POST 요청으로 데이터 전송 (헤더 추가)
-        headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'BIOFOX-AdGenerator/1.0',
-            'Connection': 'keep-alive'
+        # 요청 데이터에 job_id 포함
+        request_data = {
+            "job_id": job_id,  # 클라이언트에서 생성한 job_id
+            **data
         }
         
-        start_time = time.time()
-        st.info(f"🚀 요청 시작: {time.strftime('%H:%M:%S')}")
+        # 기본 요청 설정
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'BIOFOX-AdGenerator/1.0'
+        }
         
-        # 사용자 정의 세션으로 요청
-        response = session.post(
-            webhook_url, 
-            json=data, 
-            headers=headers, 
-            timeout=(60, 600),  # (연결 타임아웃, 읽기 타임아웃)
-            stream=False
+        st.info(f"🚀 요청 시작: {datetime.now().strftime('%H:%M:%S')} (작업 ID: {job_id[:8]}...)")
+        
+        # 요청 전송 - 즉시 응답 기대
+        response = requests.post(
+            webhook_url,
+            json=request_data,
+            headers=headers,
+            timeout=30  # 즉시 응답만 기다림
         )
         
-        # 소켓 타임아웃 복원
-        socket.setdefaulttimeout(original_timeout)
-        
-        end_time = time.time()
-        duration = end_time - start_time
-        st.info(f"✅ 응답 완료: {time.strftime('%H:%M:%S')} (소요시간: {duration:.1f}초)")
-        st.info(f"📊 응답 상태: {response.status_code}, 응답 크기: {len(response.text)} 바이트")
-        
-        # 응답 확인
-        if response.status_code == 200:
+        # 응답 확인 (200 또는 202 모두 허용)
+        if response.status_code in [200, 202]:
             try:
-                # JSON 응답 처리 시도
                 json_data = response.json()
-                st.success("✅ 정상 응답 수신")
-                return process_llm_response(json_data)
-            except json.JSONDecodeError:
-                # JSON이 아닌 응답인 경우 텍스트 처리 시도
-                st.warning("⚠️ JSON 파싱 실패, 텍스트로 처리")
-                return process_llm_response({"content": response.text})
-        elif response.status_code == 524:
-            # Cloudflare 타임아웃 오류 - 하지만 응답 본문이 있다면 처리 시도
-            if response.text and len(response.text) > 100:
-                st.warning("⏱️ Cloudflare 타임아웃이 발생했지만 응답을 받았습니다. 처리를 시도합니다...")
-                try:
-                    # 응답 본문이 있으면 처리 시도
-                    return process_llm_response({"content": response.text})
-                except Exception as e:
-                    st.error(f"❌ 응답 처리 중 오류: {str(e)}")
+                # n8n이 즉시 응답하면 202, Respond to Webhook 없으면 200
+                if json_data.get('status') == 'processing' or response.status_code == 202:
+                    st.success(f"✅ 요청이 접수되었습니다. 작업 ID: {job_id[:8]}...")
+                    # 세션에 job_id 저장
+                    st.session_state.current_job_id = job_id
+                    st.session_state.job_status = "processing"
+                    return job_id
+                elif response.status_code == 200:
+                    # n8n이 바로 200으로 응답한 경우도 허용
+                    st.success(f"✅ 요청이 접수되었습니다. 작업 ID: {job_id[:8]}...")
+                    st.session_state.current_job_id = job_id
+                    st.session_state.job_status = "processing"
+                    return job_id
+                else:
+                    st.error("❌ 예상하지 못한 응답입니다.")
+                    st.code(f"응답: {json_data}")
                     return None
-            else:
-                st.error("⏱️ 서버 응답 시간이 초과되었습니다. 처리가 완료되었을 수 있으니 잠시 후 새로고침해보세요.")
+            except Exception as e:
+                st.error(f"❌ 응답 처리 중 오류: {str(e)}")
+                st.code(f"응답 텍스트: {response.text}")
                 return None
         else:
-            st.error(f"❌ 웹훅 호출 오류: {response.status_code} - {response.text[:100]}")
+            st.error(f"❌ 웹훅 호출 오류: {response.status_code}")
+            st.code(f"응답: {response.text}")
             return None
             
-    except requests.exceptions.Timeout:
-        st.error("⏱️ 요청 시간이 초과되었습니다. 서버에서 처리가 완료되었을 수 있으니 잠시 후 새로고침해보세요.")
-        return None
     except Exception as e:
         st.error(f"❌ 웹훅 호출 중 예외 발생: {str(e)}")
         return None
+
+def check_job_result_from_api(job_id):
+    """API에서 작업 결과 확인 (POST 방식)"""
+    try:
+        # 로컬 API 서버에서 결과 확인
+        import requests
+        
+        api_url = f"http://localhost:8001/api/result/{job_id}"
+        response = requests.get(api_url, timeout=5)
+        
+        if response.status_code == 200:
+            result_data = response.json()
+            st.success(f"✅ API에서 결과를 찾았습니다! (수신 시간: {result_data.get('received_at', '')})")
+            
+            # 결과 파싱
+            if result_data.get('result_data'):
+                return process_llm_response(result_data['result_data'])
+            elif result_data.get('result'):
+                return process_llm_response({"content": result_data['result']})
+            else:
+                st.error("❌ 결과 데이터가 없습니다.")
+                return None
+                
+        elif response.status_code == 404:
+            st.warning("⏳ 아직 결과가 없습니다...")
+            return None
+        else:
+            st.error(f"❌ API 호출 오류: {response.status_code}")
+            return None
+            
+    except requests.exceptions.ConnectionError:
+        st.warning("⚠️ API 서버에 연결할 수 없습니다. Supabase로 대체 확인...")
+        # Supabase 백업 방식
+        return check_job_result_from_supabase(job_id)
+    except Exception as e:
+        st.error(f"❌ API 결과 확인 오류: {str(e)}")
+        return None
+
+def check_job_result_from_supabase(job_id):
+    """Supabase에서 작업 결과 확인 (백업 방식)"""
+    result = get_job_result(job_id)
+    if not result:
+        return None
     
-    return None
+    # 결과 파싱
+    try:
+        if isinstance(result.get('result_data'), str):
+            result_data = json.loads(result.get('result_data', '{}'))
+        else:
+            result_data = result.get('result_data', {})
+            
+        if not result_data and result.get('result'):
+            return process_llm_response({"content": result.get('result')})
+            
+        return process_llm_response(result_data)
+    except Exception as e:
+        st.error(f"❌ 결과 처리 중 오류: {str(e)}")
+        return None
+
+# 기본값을 API 방식으로 설정
+def check_job_result(job_id):
+    """작업 결과 확인 (API 우선, Supabase 백업)"""
+    return check_job_result_from_api(job_id)
 
 
 def process_llm_response(response_data):
